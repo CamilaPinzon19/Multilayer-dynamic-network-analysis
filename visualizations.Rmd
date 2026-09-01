@@ -1,0 +1,549 @@
+---
+title: "Visualizations of the multilayer dynamic networks"
+date: "2026-08-20"
+output:
+  html_document:
+    theme: default
+    highlight: kate
+    toc: true
+    toc_float: true
+    number_sections: false
+    smooth_scroll: true
+---
+
+<style>
+/* ancho del TOC */
+#TOC {
+  width: 200px;
+}
+
+/* elimina separación extra */
+.toc-content {
+  padding-left: 0px !important;
+}
+
+/* contenedor principal */
+.main-container {
+  max-width: 1200px;
+}
+</style>
+
+# Data preparation
+
+```{r message=FALSE, warning=FALSE}
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+####                           0.1 Library loading                          ####
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+library(igraph)
+library(ggraph)
+library(tidygraph)
+library(dplyr)
+library(scales)
+library(network)
+library(networkDynamic)
+library(ndtv)
+```
+
+
+```{r}
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+####                            0.2 Data loading                            ####
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+load("icews_tensor_proyecto.RData")
+
+n_tiempos <- dim(tensor_array)[4]
+n_capas <- dim(tensor_array)[3]
+n_paises <- dim(tensor_array)[1]
+
+nombres_capas <- c("Material-", "Material+", "Verbal-", "Verbal+")
+nombres_paises <- dimnames(tensor_array)$Source
+```
+
+```{r}
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+####                 1. Select the 25 most central countries                ####
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+# Array to store centrality measures
+page_cent <- array(NA,
+                  dim = c(n_paises, n_capas, n_tiempos),
+                  dimnames = list(nombres_paises, paste0("Layer_",1:n_capas), 
+                                  paste0("Time_",1:n_tiempos)))
+
+# Calculate Page Rank centrality for every graph
+for(m in 1:n_capas){
+  for(t in 1:n_tiempos){
+    A <- tensor_array[,,m,t]
+    g <- graph_from_adjacency_matrix(A, mode = "directed", weighted = TRUE, diag = FALSE)
+    page_cent[,m,t] <- page_rank(g, directed = TRUE, weights = E(g)$weight)$vector
+  }
+}
+
+# Average centrality measures across time
+cent_mean <- apply(page_cent, c(1,2), mean, na.rm = TRUE)
+
+# Identify the top 25 most central countries
+top25_layers <- vector("list", n_capas)
+for(m in 1:n_capas){
+  ord <- order(cent_mean[,m], decreasing = TRUE)
+  top25_layers[[m]] <- data.frame(Country = rownames(cent_mean)[ord[1:25]],
+                                  MeanEigenCentrality = cent_mean[ord[1:25], m])
+}
+top25_names <- lapply(top25_layers, \(x) x$Country)
+
+# Countries that are among the top 25 in all layers 
+Reduce(intersect, top25_names) 
+# There are 19 countries
+
+# - - - - - - - - - - - - - - - - Gloabl top 25 - - - - - - - - - - - - - - - - 
+
+# Compute the average eigenvector centrality across all time points
+overall_mean <- rowMeans(cent_mean)
+
+# Rank countries in decreasing order according to their average centrality
+ord <- order(overall_mean, decreasing = TRUE)
+
+# Select the 25 countries with the highest average eigenvector centrality
+top25_global <- data.frame(Country = names(overall_mean)[ord[1:25]],
+                           MeanEigenCentrality = overall_mean[ord[1:25]])
+# The top 25 include the 19 countries identified previously
+# plus 6 additional countries
+
+# Store the names of the final set of selected countries
+paises_final <- top25_global$Country
+
+# Obtain the indices of the selected countries in the original country list
+indices <- match(paises_final, nombres_paises)
+```
+
+# Visualization functions
+
+The following functions are used to avoid repeating the same graph construction, formatting, and dynamic-network code for each layer.
+
+
+```{r}
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+#                          2.1 Static network function                     
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+create_static_network <- function(tensor_array,
+                                  indices,
+                                  layer,
+                                  time,
+                                  label_map = c()) {
+  
+  # Extract the adjacency matrix for the selected layer and time
+  A <- tensor_array[indices, indices, layer, time]
+  
+  # Construct a directed weighted graph from the adjacency matrix
+  g <- graph_from_adjacency_matrix(A, mode = "directed", weighted = TRUE, diag = FALSE)
+  
+  # Compute the degree of each node, considering both incoming and outgoing edges
+  V(g)$degree <- igraph::degree(g, mode = "all")
+  
+  # Compute the node coordinates using the Nicely layout algorithm
+  set.seed(9)
+  layout <- layout_nicely(g)
+  
+  # Scale node size
+  V(g)$size <- rescale(V(g)$degree, to = c(5, 15))
+  
+  # Scale edge width
+  E(g)$width <- rescale(E(g)$weight, to = c(2, 6))
+  
+  # Define labels only for selected countries
+  V(g)$label <- ifelse(V(g)$name %in% names(label_map), unname(label_map[V(g)$name]),
+                       NA_character_)
+  
+  return(
+    list(graph = g, layout = layout)
+  )
+}
+
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+#                   2.2 Static network plotting function               
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+plot_static_network <- function(network_object,
+                                title = NULL,
+                                layout = NULL) {
+  
+  g <- network_object$graph
+  if (is.null(layout)) {
+    layout <- network_object$layout
+  }
+  
+  plot(g,
+       layout = layout,
+    
+      # Node settings
+      vertex.color = "dodgerblue2",
+      vertex.frame.color = "white",
+      vertex.size = V(g)$size,
+    
+      # Label settings
+      vertex.label = V(g)$label,
+      vertex.label.color = "black",
+      vertex.label.cex = 1,
+    
+      # Edge settings
+      edge.width = E(g)$width,
+      edge.color = adjustcolor("grey60", alpha.f = 0.5),
+      edge.arrow.size = 0.4,
+    
+      # Do not display a legend
+      rescale = TRUE
+      )
+}
+
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+#                         2.3 Static comparison function                    
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+plot_static_comparison <- function(tensor_array,
+                                   indices,
+                                   layer,
+                                   layer_name,
+                                   times = c(1, 132),
+                                   label_maps,
+                                   layout_reference_time = times[1]) {
+  
+  # Create the networks for the selected time points
+  networks <- lapply(
+    times,
+    function(time) {
+      create_static_network(tensor_array = tensor_array,
+                            indices = indices,
+                            layer = layer,
+                            time = time,
+                            label_map = label_maps[[as.character(time)]])
+    }
+  )
+  
+  # Identify the network corresponding to the reference time
+  reference_index <- match(layout_reference_time, times)
+  
+  # Use the layout from the reference time for all time points
+  common_layout <- networks[[reference_index]]$layout
+  
+  # Set the graphical parameters
+  par(mfrow = c(1, length(times)), mar = c(0, 0, 2, 0) )
+  
+  # Plot each network
+  for (i in seq_along(networks)) {
+    plot_static_network(network_object = networks[[i]],
+                        layout = common_layout,
+                        title = paste0(layer_name, " network: t = ", times[i])
+                        )
+  }
+}
+```
+
+
+
+```{r}
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+#                            2.4 Dynamic network function                    
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+create_dynamic_network <- function(tensor_array,
+                                   indices,
+                                   layer,
+                                   times,
+                                   country_names) {
+  
+  # - - - - - - - - - - - - Compute global edge weights - - - - - - - - - - - - 
+  
+  # Extract all edge weights across the selected time points
+  pesos_todos <- unlist(
+    lapply(times,
+           function(t) {
+             A <- tensor_array[indices, indices, layer, t]
+             A[A != 0 & is.finite(A)]
+             }
+           ) )
+  
+  # Remove any remaining non-finite values
+  pesos_todos <- pesos_todos[is.finite(pesos_todos)]
+  
+  # Compute the global minimum and maximum edge weights
+  min_peso <- min(pesos_todos)
+  max_peso <- max(pesos_todos)
+  
+  
+  # - - - - - - - - - - - - - Construct the edge spells - - - - - - - - - - - - 
+  
+  edge_spells <- lapply(times,
+                        function(t) {
+      # Extract the adjacency matrix at time t
+      A <- tensor_array[indices, indices, layer, t]
+      
+      # Identify the existing edges in the adjacency matrix
+      ind <- which(A != 0 & is.finite(A), arr.ind = TRUE)
+      
+      # Extract edge information
+      data.frame(onset = t,
+                 terminus = t + 1,
+                 tail = ind[, 1],
+                 head = ind[, 2],
+                 weight = A[ind],
+                 edge.lwd = if (max_peso == min_peso) {
+                   rep(5, length(ind))} else {
+                     1 + 9 * ((A[ind] - min_peso) / (max_peso - min_peso) )
+                     }
+                 )
+      }
+  )
+  
+  # Remove empty time points
+  edge_spells <- Filter(Negate(is.null), edge_spells)
+  
+  # Combine all edge spells into a single data frame
+  edge_spells <- do.call(rbind, edge_spells)
+  
+  # - - - - - - - - - - - - - Create the dynamic network - - - - - - - - - - - -
+  
+  samp.dyn <- networkDynamic(edge.spells = edge_spells,
+                             create.TEAs = TRUE,
+                             edge.TEA.names = c("weight", "edge.lwd"),
+                             directed = TRUE)
+  
+  # Assign country names to the vertices
+  network.vertex.names(samp.dyn) <- country_names
+  
+  return(samp.dyn)
+}
+
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+####                 2.5 Dynamic network rendering function            
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+render_dynamic_network <- function(samp.dyn,
+                                   layer_name,
+                                   label_map = c(),
+                                   label_cex = 0.8) {
+  
+  # Retrieve the vertex names
+  nombres <- network.vertex.names(samp.dyn)
+  
+  # Display labels only for selected countries
+  labels_seleccionados <- ifelse(nombres %in% names(label_map),
+                                 unname(label_map[nombres]), "")
+  
+  # Set the seed to ensure reproducibility of the network animation
+  set.seed(123)
+  
+  # Render the dynamic network as an interactive HTML widget
+  render.d3movie(samp.dyn,
+                 plot.par = list(displaylabels = TRUE,
+                                 label = labels_seleccionados,
+                                 label.cex = label_cex,
+                                 main = paste0(layer_name, " network (2004-2005)"),
+                                 vertex.border = "white",
+                                 edge.col = "grey60",
+                                 edge.lwd = "edge.lwd"),
+                 output.mode = "htmlWidget")
+}
+```
+
+# Visualization settings
+
+```{r}
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+#                         3.1 Visualization settings                    
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+# Define the time points used in the dynamic networks
+tiempos <- 1:24
+
+# Extract the names of the selected countries
+nombres_paises <- dimnames(tensor_array)[[1]][indices]
+
+# Define the layers
+network_layers <- data.frame(layer = 1:4,
+                             name = nombres_capas)
+
+# Define labels for each static visualization
+static_labels <- list(
+  
+  "Material-" = list(`1` = c("United States" = "USA",
+                             "Iraq" = "IRQ",
+                             "Israel" = "ISR"),
+                     `132` = c("United States" = "USA",
+                               "Iraq" = "IRQ",
+                               "Syria" = "SYR")
+                     ),
+  
+  "Material+" = list(`1` = c("United States" = "USA",
+                             "Iraq" = "IRQ"),
+                     `132` = c("United States" = "USA",
+                               "Iraq" = "IRQ")
+                     ),
+  
+  "Verbal-" = list(`1` = c("United States" = "USA",
+                           "Iraq" = "IRQ",
+                           "Israel" = "ISR"),
+                   `132` = c("United States" = "USA",
+                             "Iraq" = "IRQ",
+                             "Russian Federation" = "RUS")
+                   ),
+  
+  "Verbal+" = list(`1` = c("United States" = "USA",
+                           "United Kingdom" = "UK"),
+                   `132` = c("United States" = "USA",
+                             "United Kingdom" = "UK")
+  )
+)
+
+# Define labels for the dynamic networks
+dynamic_labels <- list(
+  "Material-" = c("United States" = "USA", "Iraq" = "IRQ"),
+  
+  "Material+" = c("United States" = "USA", "Iraq" = "IRQ"),
+  
+  "Verbal-" = c("United States" = "USA", "Iraq" = "IRQ"),
+  
+  "Verbal+" = c("United States" = "USA", "United Kingdom" = "UK")
+)
+```
+
+# Visualizations
+
+To identify the most relevant actors in the network, the three countries with the highest degree centrality are highlighted. In all static network visualizations, node size is proportional to degree centrality.
+
+## Material- type network
+
+```{r fig.height=6, fig.width=12, message=FALSE, warning=FALSE, out.width="100%"}
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+####                         Material- static network                    ####
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+plot_static_comparison(tensor_array = tensor_array,
+                       indices = indices,
+                       layer = 1,
+                       layer_name = "Material-",
+                       times = c(1, 132),
+                       label_maps = static_labels[["Material-"]],
+                       layout_reference_time = 1)
+```
+
+
+```{r message=FALSE, warning=FALSE, out.width="100%"}
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+####                        Material- dynamic network                    ####
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+dynamic_material_minus <- create_dynamic_network(tensor_array = tensor_array,
+                                                 indices = indices,
+                                                 layer = 1,
+                                                 times = tiempos,
+                                                 country_names = nombres_paises)
+
+render_dynamic_network(samp.dyn = dynamic_material_minus,
+                       layer_name = "Material-",
+                       label_map = dynamic_labels[["Material-"]],
+                       label_cex = 0.8)
+```
+
+## Material+ type network
+
+
+```{r fig.height=6, fig.width=12, message=FALSE, warning=FALSE, out.width="100%"}
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+####                         Material+ static network                    ####
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+plot_static_comparison(tensor_array = tensor_array,
+                       indices = indices,
+                       layer = 2,
+                       layer_name = "Material+",
+                       times = c(1, 132),
+                       label_maps = static_labels[["Material+"]],
+                       layout_reference_time = 1)
+```
+
+
+```{r message=FALSE, warning=FALSE, out.width="100%"}
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+####                        Material+ dynamic network                    ####
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+dynamic_material_plus <- create_dynamic_network(tensor_array = tensor_array,
+                                                indices = indices,
+                                                layer = 2,
+                                                times = tiempos,
+                                                country_names = nombres_paises)
+
+render_dynamic_network(samp.dyn = dynamic_material_plus,
+                       layer_name = "Material+",
+                       label_map = dynamic_labels[["Material+"]],
+                       label_cex = 0.8)
+```
+
+## Verbal- type network
+
+```{r fig.height=6, fig.width=12, message=FALSE, warning=FALSE, out.width="100%"}
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+####                          Verbal- static network                     ####
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+plot_static_comparison(tensor_array = tensor_array,
+                       indices = indices,
+                       layer = 3,
+                       layer_name = "Verbal-",
+                       times = c(1, 132),
+                       label_maps = static_labels[["Verbal-"]],
+                       layout_reference_time = 132)
+```
+
+### Dynamic network
+
+```{r message=FALSE, warning=FALSE, out.width="100%"}
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+####                         Verbal- dynamic network                     ####
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+dynamic_verbal_minus <- create_dynamic_network(tensor_array = tensor_array,
+                                               indices = indices,
+                                               layer = 3,
+                                               times = tiempos,
+                                               country_names = nombres_paises)
+
+render_dynamic_network(samp.dyn = dynamic_verbal_minus,
+                       layer_name = "Verbal-",
+                       label_map = dynamic_labels[["Verbal-"]],
+                       label_cex = 0.8)
+```
+
+## Verbal+ type network
+
+```{r fig.height=6, fig.width=12, message=FALSE, warning=FALSE, out.width="100%"}
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+####                          Verbal+ static network                     ####
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+plot_static_comparison(tensor_array = tensor_array,
+                       indices = indices,
+                       layer = 4,
+                       layer_name = "Verbal+",
+                       times = c(1, 132),
+                       label_maps = static_labels[["Verbal+"]],
+                       layout_reference_time = 132)
+```
+
+```{r message=FALSE, warning=FALSE, out.width="100%"}
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+####                         Verbal+ dynamic network                     ####
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+dynamic_verbal_plus <- create_dynamic_network(tensor_array = tensor_array,
+                                              indices = indices,
+                                              layer = 4,
+                                              times = tiempos,
+                                              country_names = nombres_paises)
+
+render_dynamic_network(samp.dyn = dynamic_verbal_plus,
+                       layer_name = "Verbal+",
+                       label_map = dynamic_labels[["Verbal+"]],
+                       label_cex = 0.8)
+```
