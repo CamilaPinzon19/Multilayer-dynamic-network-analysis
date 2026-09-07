@@ -49,7 +49,7 @@ library(ndtv)
 # ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 ####                            0.2 Data loading                            ####
 # ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-load("icews_tensor_proyecto.RData")
+load("icews_tensor_processed.RData")
 
 n_tiempos <- dim(tensor_array)[4]
 n_capas <- dim(tensor_array)[3]
