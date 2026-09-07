@@ -350,7 +350,7 @@ mplot.diag <- function(xx,
 # ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
 # Load the data
-load("icews_tensor_proyecto.RData")
+load("icews_tensor_processed.RData")
 
 # Number of times, layers and countries
 n_tiempos <- dim(tensor_array)[4]
