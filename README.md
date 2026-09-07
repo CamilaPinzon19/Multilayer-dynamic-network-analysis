@@ -24,11 +24,20 @@ The study includes network centrality analysis, structural network features, Mat
 
 ## Data
 
-The analysis uses ICEWS event data described in Hoff (2015). The data consist of weekly interactions between countries classified into four types: negative material, positive material, negative verbal, and positive verbal interactions.
+The analysis uses event-level data from the Integrated Crisis Early Warning System (ICEWS), available through the [Harvard Dataverse](https://dataverse.harvard.edu/dataverse/icews).
 
-The processed data are stored as a tensor containing the interactions by country, layer, and time period.
+The raw ICEWS event files from 2004–2014 were processed by:
 
-Reference:
+- Combining the yearly event files
+- Classifying events into four interaction layers using CAMEO codes
+- Removing self-interactions
+- Aggregating events by source country, target country, interaction type, and month
+- Constructing a four-dimensional tensor of interactions:
+  `Source × Target × Type × Month`
+
+The resulting tensor is stored in `icews_tensor_processed.RData`.
+
+The ICEWS data are also used in:
 
 Hoff, P. D. (2015). *Multilinear tensor regression for longitudinal relational data*. Annals of Applied Statistics, 9(3), 1169–1193. https://doi.org/10.1214/15-AOAS839
 
